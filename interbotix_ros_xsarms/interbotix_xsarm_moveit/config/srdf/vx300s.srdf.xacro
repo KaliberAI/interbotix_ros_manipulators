@@ -59,10 +59,10 @@
     </group_state>
     <group_state name="Default" group="interbotix_arm">
         <joint name="waist" value="0.0" />
-        <joint name="shoulder" value="-1.0472" />
+        <joint name="shoulder" value="-1.05" />
         <joint name="elbow" value="0.35" />
         <joint name="forearm_roll" value="0" />
-        <joint name="wrist_angle" value="1.22" />
+        <joint name="wrist_angle" value="1.25" />
         <joint name="wrist_rotate" value="0.0" />
     </group_state>
     <group_state name="Grasping" group="interbotix_gripper">
