@@ -27,20 +27,24 @@
 # POSSIBILITY OF SUCH DAMAGE.
 
 from launch import LaunchDescription
+from launch import conditions
 from launch.actions import (
     DeclareLaunchArgument,
     IncludeLaunchDescription,
     OpaqueFunction,
 )
+from interbotix_common_modules.launch import AndCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import (
     LaunchConfiguration,
     PathJoinSubstitution,
 )
 from launch_ros.substitutions import FindPackageShare
+from launch_ros.actions import Node
 
 def launch_setup(context, *args, **kwargs):
 
+    enable_camera_launch_arg = LaunchConfiguration('enable_camera')
     pointcloud_enable_launch_arg = LaunchConfiguration('rs_camera_pointcloud_enable')
     rbg_camera_profile_launch_arg = LaunchConfiguration('rs_camera_rbg_camera_profile')
     depth_module_profile_launch_arg = LaunchConfiguration('rs_camera_depth_module_profile')
@@ -54,8 +58,15 @@ def launch_setup(context, *args, **kwargs):
     enable_pipeline_launch_arg = LaunchConfiguration('enable_pipeline')
     cloud_topic_launch_arg = LaunchConfiguration('cloud_topic')
 
+    # GStreamer streaming parameters
+    enable_gstreamer_launch_arg = LaunchConfiguration('enable_gstreamer')
+    gstreamer_image_topic_launch_arg = LaunchConfiguration('gstreamer_image_topic')
+    gstreamer_host_launch_arg = LaunchConfiguration('gstreamer_host')
+    gstreamer_port_launch_arg = LaunchConfiguration('gstreamer_port')
+
     rs_camera_launch_include = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource([
+        condition=conditions.IfCondition(enable_camera_launch_arg),
+        launch_description_source=PythonLaunchDescriptionSource([
             PathJoinSubstitution([
                 FindPackageShare('realsense2_camera'),
                 'launch',
@@ -65,8 +76,10 @@ def launch_setup(context, *args, **kwargs):
         launch_arguments={
             'camera_name': 'camera',
             'camera_namespace': '',
-            'rgb_camera.profile': rbg_camera_profile_launch_arg,
-            'depth_module.profile': depth_module_profile_launch_arg,
+            'rgb_camera.color_profile': rbg_camera_profile_launch_arg,
+            'depth_module.depth_profile': depth_module_profile_launch_arg,
+            'depth_module.color_profile': rbg_camera_profile_launch_arg,  # D405 uses depth_module for color stream
+            # infra is disabled in the launch file by default
             'pointcloud.enable': pointcloud_enable_launch_arg,
             'initial_reset': initial_reset_launch_arg,
             'log_level': logging_level_launch_arg,
@@ -75,7 +88,8 @@ def launch_setup(context, *args, **kwargs):
     )
 
     pc_filter_launch_include = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource([
+        condition=conditions.IfCondition(enable_camera_launch_arg),
+        launch_description_source=PythonLaunchDescriptionSource([
             PathJoinSubstitution([
                 FindPackageShare('interbotix_perception_modules'),
                 'launch',
@@ -112,16 +126,41 @@ def launch_setup(context, *args, **kwargs):
         }.items(),
     )
 
+    # GStreamer streaming node - bridges ROS image topic to GStreamer pipeline
+    # This subscribes to ROS image topic and streams it via GStreamer TCP server
+    gstreamer_bridge_node = Node(
+        package='viper_track',
+        executable='ros_to_gstreamer_bridge',
+        name='gstreamer_bridge',
+        condition=AndCondition([
+            conditions.IfCondition(enable_camera_launch_arg),
+            conditions.IfCondition(enable_gstreamer_launch_arg)
+        ]),
+        parameters=[{
+            'image_topic': gstreamer_image_topic_launch_arg,
+            'host': gstreamer_host_launch_arg,
+            'port': gstreamer_port_launch_arg,
+        }],
+    )
 
     return [
         rs_camera_launch_include,
         pc_filter_launch_include,
         camera_tf_launch_include,
+        gstreamer_bridge_node,
     ]
 
 
 def generate_launch_description():
     declared_arguments = []
+    declared_arguments.append(
+        DeclareLaunchArgument(
+            'enable_camera',
+            default_value='true',
+            choices=('true', 'false'),
+            description='enable the RealSense camera.',
+        )
+    )
     declared_arguments.append(
         DeclareLaunchArgument(
             'rs_camera_pointcloud_enable',
@@ -133,15 +172,15 @@ def generate_launch_description():
     declared_arguments.append(
         DeclareLaunchArgument(
             'rs_camera_rbg_camera_profile',
-            default_value='640x480x30',
-            description='profile for the rbg camera image stream, in `<width>x<height>x<fps>`.',
+            default_value='1280,720,15',
+            description='profile for the rbg camera image stream, in `<width>,<height>,<fps>`.',
         )
     )
     declared_arguments.append(
         DeclareLaunchArgument(
             'rs_camera_depth_module_profile',
-            default_value='640x480x30',
-            description='profile for the depth module stream, in `<width>x<height>x<fps>`.',
+            default_value='1280,720,15',
+            description='profile for the depth module stream, in `<width>,<height>,<fps>`.',
         )
     )
     declared_arguments.append(
@@ -217,6 +256,36 @@ def generate_launch_description():
             'cloud_topic',
             default_value='/camera/depth/color/points',
             description='the absolute ROS topic name to subscribe to raw pointcloud data.',
+        )
+    )
+    # GStreamer streaming parameters
+    declared_arguments.append(
+        DeclareLaunchArgument(
+            'enable_gstreamer',
+            default_value='false',
+            choices=('true', 'false'),
+            description='Enable GStreamer streaming from ROS image topic.',
+        )
+    )
+    declared_arguments.append(
+        DeclareLaunchArgument(
+            'gstreamer_image_topic',
+            default_value='/camera/color/image_rect_raw',
+            description='ROS image topic to stream via GStreamer.',
+        )
+    )
+    declared_arguments.append(
+        DeclareLaunchArgument(
+            'gstreamer_host',
+            default_value='127.0.0.1',
+            description='Host address for GStreamer TCP server sink.',
+        )
+    )
+    declared_arguments.append(
+        DeclareLaunchArgument(
+            'gstreamer_port',
+            default_value='5000',
+            description='Port for GStreamer TCP server sink.',
         )
     )
     return LaunchDescription(declared_arguments + [OpaqueFunction(function=launch_setup)])
